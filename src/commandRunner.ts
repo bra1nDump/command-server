@@ -1,11 +1,45 @@
-import { open } from "fs/promises";
+//import { open } from "fs/promises";
 import { Minimatch } from "minimatch";
 import * as vscode from "vscode";
 
-import { readRequest, writeResponse } from "./io";
 import { getResponsePath } from "./paths";
 import { any } from "./regex";
 import { Request, Response } from "./types";
+
+import * as http from "http";
+
+function getRequestJSON(req: http.IncomingMessage) {
+  return new Promise<any>((resolve, reject) => {
+    var body = "";
+    req.on("data", function (chunk) {
+      body += chunk;
+    });
+    req.on("end", () => resolve(JSON.parse(body)));
+  });
+}
+
+function createServer(): Promise<[http.Server, Request, http.ServerResponse]> {
+  return new Promise((resolve, reject) => {
+    const port = 7001;
+
+    const server = http.createServer(async (req, res) => {
+      const requestJSON = await getRequestJSON(req);
+
+      res.setHeader('Content-Type', 'text/plain');
+
+      resolve([server, requestJSON, res])
+    });
+
+    server.listen(port, () => {
+      console.log(`Server running at ${port}`);
+    })
+
+    setTimeout(() => {
+      server.close();
+      reject('Timed out waiting for command');
+    }, 25);
+  });
+}
 
 export default class CommandRunner {
   allowRegex!: RegExp;
@@ -51,14 +85,19 @@ export default class CommandRunner {
    * types.
    */
   async runCommand() {
-    const responseFile = await open(getResponsePath(), "wx");
+    const responseFile : any = undefined;//await open(getResponsePath(), "wx");
 
+    var server: http.Server;
     var request: Request;
+    var response: http.ServerResponse;
 
     try {
-      request = await readRequest();
+      // request = await readRequest();
+      //console.time();
+      [server, request, response] = await createServer();
+      //console.timeEnd();
     } catch (err) {
-      await responseFile.close();
+      //await responseFile.close();
       throw err;
     }
 
@@ -94,20 +133,37 @@ export default class CommandRunner {
         await commandPromise;
       }
 
-      await writeResponse(responseFile, {
-        error: null,
-        uuid,
-        returnValue: commandReturnValue,
-        warnings,
-      });
+      response.statusCode = 200;
+      response.end(JSON.stringify({
+          error: null,
+          uuid,
+          returnValue: commandReturnValue,
+          warnings,
+        })
+      );
+      server.close();
+      // await writeResponse(responseFile, {
+      //   error: null,
+      //   uuid,
+      //   returnValue: commandReturnValue,
+      //   warnings,
+      // });
     } catch (err) {
-      await writeResponse(responseFile, {
-        error: err.message,
-        uuid,
-        warnings,
-      });
+      response.statusCode = 200;
+      response.end(JSON.stringify({
+          error: err.message,
+          uuid,
+          warnings,
+        })
+      );
+      server.close();
+      // await writeResponse(responseFile, {
+      //   error: err.message,
+      //   uuid,
+      //   warnings,
+      // });
     }
 
-    await responseFile.close();
+    ////await responseFile.close();
   }
 }
